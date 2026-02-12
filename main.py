@@ -4,6 +4,15 @@ from flask_socketio import SocketIO
 # This module lets us pick random numbers, you can remove it later.
 import random
 
+# BMP180 barometric pressure sensor (Pi-only; falls back to mock on Mac for local dev)
+try:
+    from bmp180 import BMP180
+    bmp = BMP180()
+    HAS_SENSOR = True
+except (ImportError, OSError):
+    bmp = None
+    HAS_SENSOR = False
+
 # Here, we create the neccesary base app. You don't need to worry about this.
 app = Flask(__name__)
 socketio = SocketIO(app)
@@ -18,18 +27,15 @@ def background_thread():
     while True:
         # We sleep here for a single second, but this can be increased or decreased depending on how quickly you want data to be pushed to clients.
         socketio.sleep(1)
-        # Then, we emit an event called "update_data" - but this can actually be whatever we want - with the data being a dictionary
-        # where 'randomNumber' is set to a random number we choose here. You should replace the data being sent back with your sensor data
-        # that you fetch from things connected to your Pi.
+        # Read barometric pressure from BMP180 (or mock value when sensor not available)
+        barometric_pressure = bmp.get_pressure() if HAS_SENSOR else round(1013.25 + random.uniform(-5, 5), 2)
         socketio.emit(
             'update_data',
             {
                 'randomNumber': random.randint(1, 100),
-                # you can add more here! for instance, something along the lines of:
-                # 'mySensor': mysensor.get_sensor_data(),
+                'barometricPressure': barometric_pressure,
             }
         )
-        # To add a your first new sensor, try giving https://docs.aerospacejam.org/getting-started/first-sensor a read!
 
 # This function runs when someone connects to the server - and all we do is start the background thread to update the data.
 @socketio.on('connect')
@@ -37,7 +43,13 @@ def handle_connect():
     print('Client connected')
     socketio.start_background_task(target=background_thread)
 
-# This function is called
+
+@socketio.on('do_a_thing')
+def do_a_thing(msg):
+    """Handle button clicks from the client - use this pattern for motors, etc."""
+    print(msg.get('hello', 'Button clicked!'))
+
+
 def main():
     # These specific arguments are required to make sure the webserver is hosted in a consistent spot, so don't change them unless you know what you're doing.
     socketio.run(app, host='0.0.0.0', port=80, allow_unsafe_werkzeug=True)

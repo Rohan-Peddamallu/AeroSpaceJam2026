@@ -1,46 +1,119 @@
-# These two modules allow us to run a web server.
+# Aerospace Jam - code from official docs (https://docs.aerospacejam.org)
 from flask import Flask, render_template
 from flask_socketio import SocketIO
-# This module lets us pick random numbers, you can remove it later.
 import random
+from bmp180 import BMP180
 
-# Here, we create the neccesary base app. You don't need to worry about this.
+from picamera2 import Picamera2
+import io
+import base64
+
+from mpu6050 import mpu6050
+import RPi.GPIO as GPIO
+
 app = Flask(__name__)
 socketio = SocketIO(app)
+bmp = BMP180()
+mpu = mpu6050(0x68)
 
-# When someone requests the root page from our web server, we return 'index.html'.
+# Motor - from Motor doc
+IN1 = 12
+IN2 = 13
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(IN1, GPIO.OUT)
+GPIO.setup(IN2, GPIO.OUT)
+
+
+def motor_forward():
+    """Turns the motor forward"""
+    GPIO.output(IN1, GPIO.HIGH)
+    GPIO.output(IN2, GPIO.LOW)
+
+
+def motor_backward():
+    """Turns the motor backward"""
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.HIGH)
+
+
+def motor_stop():
+    """Stops the motor"""
+    GPIO.output(IN1, GPIO.LOW)
+    GPIO.output(IN2, GPIO.LOW)
+
+
+# Camera - from Camera doc
+picam2 = Picamera2()
+camera_config = picam2.create_preview_configuration(main={"size": (640, 480)})
+picam2.configure(camera_config)
+picam2.start()
+
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# This function runs in the background to transmit data to connected clients.
+
 def background_thread():
     while True:
-        # We sleep here for a single second, but this can be increased or decreased depending on how quickly you want data to be pushed to clients.
         socketio.sleep(1)
-        # Then, we emit an event called "update_data" - but this can actually be whatever we want - with the data being a dictionary
-        # where 'randomNumber' is set to a random number we choose here. You should replace the data being sent back with your sensor data
-        # that you fetch from things connected to your Pi.
+        barometricPressure = bmp.get_pressure()
+        accel_data = mpu.get_accel_data()
+        gyro_data = mpu.get_gyro_data()
         socketio.emit(
             'update_data',
             {
                 'randomNumber': random.randint(1, 100),
-                # you can add more here! for instance, something along the lines of:
-                # 'mySensor': mysensor.get_sensor_data(),
+                'barometricPressure': barometricPressure,
+                'accel_x': accel_data['x'],
+                'accel_y': accel_data['y'],
+                'accel_z': accel_data['z'],
+                'gyro_x': gyro_data['x'],
+                'gyro_y': gyro_data['y'],
+                'gyro_z': gyro_data['z'],
             }
         )
-        # To add a your first new sensor, try giving https://docs.aerospacejam.org/getting-started/first-sensor a read!
 
-# This function runs when someone connects to the server - and all we do is start the background thread to update the data.
+
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
     socketio.start_background_task(target=background_thread)
 
-# This function is called
+
+@socketio.on('do_a_thing')
+def do_a_thing(msg):
+    print(msg['hello'])
+
+
+@socketio.on('motor_forward')
+def handle_motor_forward():
+    motor_forward()
+
+
+@socketio.on('motor_backward')
+def handle_motor_backward():
+    motor_backward()
+
+
+@socketio.on('motor_stop')
+def handle_motor_stop():
+    motor_stop()
+
+
+@socketio.on('request_image')
+def handle_image_request():
+    stream = io.BytesIO()
+    picam2.capture_file(stream, format='jpeg')
+    stream.seek(0)
+    b64_image = base64.b64encode(stream.read()).decode('utf-8')
+    socketio.emit('new_image', {'image_data': b64_image})
+    print("Sent new image to client.")
+
+
 def main():
-    # These specific arguments are required to make sure the webserver is hosted in a consistent spot, so don't change them unless you know what you're doing.
     socketio.run(app, host='0.0.0.0', port=80, allow_unsafe_werkzeug=True)
+
 
 if __name__ == '__main__':
     main()
